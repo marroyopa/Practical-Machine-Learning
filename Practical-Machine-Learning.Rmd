@@ -1,0 +1,250 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Marc Arroyo"
+date: "25/1/2021"
+output: html_document
+---
+
+## 0. Introduction
+
+This document is Marc Arroyo proposed solution for the Course Project of Practical Machine Learning module, in Data Science Specialization given by Johns Hopkins University via Coursera.
+
+## 1. Overview
+
+In this project we will use data of six individuals performing a set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions, one of them is the correct execution (Class A), and the other four are different wrong executions of the exercise (Classes B to E).
+
+Using the data extracted from four different sensors being worn by the individuals during the execution of the different repetitions we will try to predict to which class does the repetition belong to. 
+
+### 1.1 Citation
+
+This data has been generously given by:
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more in their [home page](http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz6kYRdV0yH)
+
+## 2. Data Processing
+
+### 2.1. Preparing Environment
+
+First thing we will do is to load required libraries, set common chunk parameters and locale language to English, as mine it is not.
+
+```{r, EnvPrep, echo = TRUE, message = FALSE, warning = FALSE, error = FALSE, results='hide'}
+
+library(knitr)
+library(caret)
+
+opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, error = FALSE)
+
+Sys.setlocale("LC_ALL", "English")
+
+```
+
+### 2.2. Loading and Exploring Data
+
+Now we will load training data and test data. 
+
+```{r, readdata}
+
+rawdata <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+
+validation <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+dim(rawdata)
+dim(validation)
+
+```
+
+As we can see, both data.frame have the same number of columns, **`r ncol(rawdata)`**, but while rawdata has **`r nrow(rawdata)`** rows, validation has only **`r nrow(validation)`**.
+
+```{r, exploredata}
+
+str(rawdata)
+
+```
+
+### 2.3. Preprocessing data
+
+#### 2.3.1. Cleaning NA values
+
+A lot of columns appear to have a high number of NA's, first cleaning we will do is to remove columns with too much NA's, considering too much as the 50% of the values being NA.
+
+```{r, NAcleaning}
+
+thresNAs <- 0.5 * nrow(rawdata)
+
+removecols <- colSums(is.na(rawdata)) <= thresNAs
+
+Newdata <- rawdata[ , removecols]
+validation <- validation[ , removecols] # Remove same columns form validation
+
+```
+
+Now we have passed from `r ncol(rawdata)` to `r ncol(Newdata)` columns.
+
+#### 2.3.2. Selection of pertinent variables
+
+Now we will eliminate columns that have one unique value or having more than one, they are few and the ratio of the frequency of the most common value to the frequency of the second most common value is large. To do so, we will use the function nearZerovar() from the caret package.
+
+Finally, we will eliminate all the columns regarding row number, individual and timestamp, because won't add information to our prediction, and will transform classe into a factor variable.
+
+```{r, pertivar}
+
+ZeroVarCol <- nearZeroVar(Newdata)
+Newdata <- Newdata[,-ZeroVarCol]
+validation <- validation[,-ZeroVarCol]
+
+Newdata <- Newdata[,-c(1:5)]
+validation <- validation[,-c(1:5)]
+
+Newdata$classe <- as.factor(Newdata$classe)
+
+```
+
+Now, our data.frames have been reduced to only `r ncol(Newdata)` were our outcome, classe is the last column.
+
+#### 2.3.3. Training and Testing data creation
+
+Next step is to divide our data.frame into a training set and a testing set.
+
+```{r, dividedata}
+
+set.seed(25012021) 
+inTrain <- createDataPartition(Newdata$classe, p = 0.7, list = FALSE)
+training <- Newdata[inTrain, ]
+testing <- Newdata[-inTrain, ]
+
+```
+
+And now we have three dataframes to work with:
+
+        1. training --> with **`r nrow(training)`** rows and **`r ncol(training)`** cols to train the system
+        2. testing --> with **`r nrow(testing)`** rows and **`r ncol(testing)`** cols to test the validity of every model
+        3. validation --> with **`r nrow(validation)`** rows and `r ncol(validation)` cols to validate our final model
+
+
+## 3. Model building
+
+### 3.1. Model Selection
+
+As we have a classification problem in front of us, we will create and predict with following models:
+        - Classification tree using rpart method on the caret package
+        - Random Forest
+        - Boosting with trees method
+        
+```{r, modelselect}
+
+# Due to the computational needs of Random Forest and Boosting, we need to control computational nuances of the train function for those methods.
+
+set.seed(25012021) 
+
+mod_rpart <- train(classe ~ ., method = "rpart", data = training)
+
+contrf <- trainControl(method="cv", 5)
+
+mod_rf <- train(classe ~ ., method = "rf", data = training, trControl = contrf, ntree = 200)
+
+contrgbm <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+
+mod_gbm <- train(classe ~ ., method = "gbm", data = training, trControl = contrgbm, verbose = FALSE)
+
+# Now will use every model to predict testing data.frame and create their confusion Matrix to evaluate the accuracy of every model build.
+
+pred_rpart <- predict(mod_rpart, newdata = testing)
+cm_rpart <- confusionMatrix(pred_rpart, testing$classe)
+
+pred_rf <- predict(mod_rf, newdata = testing)
+cm_rf <- confusionMatrix(pred_rf, testing$classe)
+
+pred_gbm <- predict(mod_gbm, newdata = testing)
+cm_gbm <- confusionMatrix(pred_gbm, testing$classe)
+
+```
+
+And now, using the confusion Matrix, we can confirm that the rpart method has an an accuracy of **`r round(cm_rpart$overall["Accuracy"]*100,2)`%**, the random forest has an accuracy of **`r round(cm_rf$overall["Accuracy"]*100,2)`%** and the boosting method achieves **`r round(cm_gbm$overall["Accuracy"]*100,2)`%** of accuracy.
+
+Then, we will discard the rpart model because of its lack of accuracy, and will prefer the random forest over the boosting, even having boosting a very good accuracy too.
+
+### 3.2. Applying the model validation data
+
+Now we will apply our random forest and boosting models to the validation dataframe. Even if we will prefer the random forest model, will be a nice exercise to compare the result of both models.
+
+```{r, validation}
+
+valid_rf <- predict(mod_rf, validation)
+valid_gbm <- predict(mod_gbm, validation)
+
+```
+
+And now we can note that between the classe predicted by both models for every line of the validation dataframe there are **`r sum(valid_gbm!=valid_rf)`** differences, and the predicted values are:
+
+
+```{r, printval}
+
+print(valid_rf)
+
+```
+
+## A. APPENDIX I
+
+### A.I.1 Classification tree model
+
+The rpart model is as follows:
+
+```{r, rpartmod}
+
+print(mod_rpart)
+
+```
+
+And its confusion matrix is:
+
+```{r, rpartmat}
+
+print(cm_rpart)
+
+```
+
+Where we can check the high amount of values outside the diagonal of the matrix, turning the model in not useful.
+
+### A.I.2 Random Forest
+
+Printing the Random Forest model we can check its great accuracy and the small values outside the diagonal of the confusion matrix with the train data frame:
+
+```{r, rfmod}
+
+print(mod_rf)
+print(mod_rf$finalModel)
+
+```
+
+And its confusion matrix with the testing data frame is:
+
+```{r, rfmat}
+
+print(cm_rf)
+
+```
+
+Where we can check the small values outside the diagonal of the matrix, giving a great performance to the model.
+
+### A.I.3 Boosting
+
+Printing the general boosting model we can check its more than decent accuracy:
+
+```{r, boostmod}
+
+print(mod_gbm$finalModel)
+print(mod_gbm$results)
+
+```
+
+And its confusion matrix with the testing data frame is:
+
+```{r, boostmat}
+
+print(cm_gbm)
+
+```
+
+Where we can check the small values outside the diagonal of the matrix, giving a great performance to the model.
